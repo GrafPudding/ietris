@@ -1,16 +1,20 @@
 <script setup>
+import { ref } from 'vue'
+import Lobby from './components/Lobby.vue'
 import GameEngine from './components/GameEngine.vue'
+const lobbyRef = ref(null)
 </script>
 
 <template>
   <div class="app">
     <header>
       <h1>Typing Autist Test</h1>
-      <p>Type the words as quickly and accurately as possible!</p>
+      <p>Type the words as quickly and accurately as possible, ninja!</p>
     </header>
 
     <main>
-      <GameEngine />
+      <Lobby ref="lobbyRef" />
+      <GameEngine :room-id="lobbyRef?.currentRoom ?? ''" />
     </main>
   </div>
 </template>

@@ -1,5 +1,8 @@
 <script setup>
-import { ref, computed, onUnmounted } from 'vue';
+import { ref, computed, onUnmounted, onMounted, watch } from 'vue'
+import comm from '@/comm/comm'
+
+const props = defineProps({ roomId: { type: String, default: '' } })
 
 const gameState = ref({
   words: [
@@ -16,78 +19,100 @@ const gameState = ref({
   gameFinished: false,
   totalTime: 0,
   errors: 0
-});
+})
 
-const currentWord = computed(() => {
-  return gameState.value.words[gameState.value.currentWordIndex];
-});
+const currentWord = computed(() => gameState.value.words[gameState.value.currentWordIndex])
 
 const averageWPM = computed(() => {
   if (gameState.value.gameFinished && gameState.value.totalTime > 0) {
-    const minutes = gameState.value.totalTime / 60000; // Convert ms to minutes
-    const wordsTyped = gameState.value.words.length;
-    return Math.round(wordsTyped / minutes);
+    const minutes = gameState.value.totalTime / 60000
+    const wordsTyped = gameState.value.words.length
+    return Math.round(wordsTyped / minutes)
   }
-  return 0;
-});
+  return 0
+})
 
 const accuracy = computed(() => {
   if (gameState.value.gameFinished) {
-    const totalCharacters = gameState.value.words.reduce((acc, word) => acc + word.text.length, 0);
-    return Math.round(((totalCharacters - gameState.value.errors) / totalCharacters) * 100);
+    const totalCharacters = gameState.value.words.reduce((acc, w) => acc + w.text.length, 0)
+    return Math.round(((totalCharacters - gameState.value.errors) / totalCharacters) * 100)
   }
-  return 100;
-});
+  return 100
+})
 
-let startTime = 0;
-let timerInterval = null;
-
-function startTimer() {
-  startTime = Date.now();
+let startTime = 0, timerInterval = null
+function startTimer(at = Date.now()) {
+  startTime = at
   timerInterval = setInterval(() => {
     if (!gameState.value.gameFinished) {
-      gameState.value.totalTime = Date.now() - startTime;
+      gameState.value.totalTime = Date.now() - startTime
     }
-  }, 100);
+  }, 100)
 }
+function stopTimer() { if (timerInterval) clearInterval(timerInterval) }
+onUnmounted(stopTimer)
 
-function stopTimer() {
-  if (timerInterval) {
-    clearInterval(timerInterval);
-  }
-}
-
-onUnmounted(() => {
-  stopTimer();
-});
+//callbacks from CommunicationManager
+let off = []
+onMounted(() => {
+  off.push(
+    comm.on('game:start', ({ startTs, words }) => {
+      if (!gameState.value.gameStarted) {
+        if (Array.isArray(words) && words.length) {
+          gameState.value.words = words.map(w => ({ ...w, status: 'pending' }))
+        }
+        gameState.value.gameStarted = true
+        startTimer(startTs || Date.now())
+      }
+    }),
+    comm.on('player:progress', ({ id, index }) => {
+      // optional: reflect opponent progress in UI (not shown)
+       console.log('opponent', id, index)
+    }),
+    comm.on('game:results', ({ leaderboard }) => {
+      // optional: show final leaderboard
+       console.table(leaderboard)
+    })
+  )
+})
+onUnmounted(() => off.forEach(fn => fn()))
 
 function checkTyping() {
+  // start game (single or room) on first keystroke
   if (!gameState.value.gameStarted && gameState.value.inputText.length === 1) {
-    gameState.value.gameStarted = true;
-    startTimer();
-  }
-
-  const currentTyped = gameState.value.inputText;
-  const targetWord = currentWord.value.text;
-  
-  // Check for errors
-  if (currentTyped.length > 0) {
-    const lastChar = currentTyped[currentTyped.length - 1];
-    const targetChar = targetWord[currentTyped.length - 1];
-    if (lastChar !== targetChar) {
-      gameState.value.errors++;
+    gameState.value.gameStarted = true
+    if (props.roomId) {
+      comm.startGame(props.roomId)
+      startTimer()
+    } else {
+      startTimer()
     }
   }
 
-  // Check if word is completed
+  const currentTyped = gameState.value.inputText
+  const targetWord = currentWord.value.text
+
+  if (currentTyped.length > 0) {
+    const lastChar = currentTyped[currentTyped.length - 1]
+    const targetChar = targetWord[currentTyped.length - 1]
+    if (lastChar !== targetChar) gameState.value.errors++
+  }
+
   if (currentTyped === targetWord) {
-    currentWord.value.status = 'completed';
-    gameState.value.currentWordIndex++;
-    gameState.value.inputText = '';
+    currentWord.value.status = 'completed'
+    gameState.value.currentWordIndex++
+    gameState.value.inputText = ''
+
+    if (props.roomId) {
+      comm.sendProgress(props.roomId, gameState.value.currentWordIndex, gameState.value.errors)
+    }
 
     if (gameState.value.currentWordIndex >= gameState.value.words.length) {
-      gameState.value.gameFinished = true;
-      stopTimer();
+      gameState.value.gameFinished = true
+      stopTimer()
+      if (props.roomId) {
+        comm.finishGame(props.roomId, gameState.value.totalTime, gameState.value.errors)
+      }
     }
   }
 }
